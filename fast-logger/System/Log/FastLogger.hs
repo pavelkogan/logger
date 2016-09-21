@@ -64,7 +64,7 @@ import System.Log.FastLogger.Date
 --   The number of loggers is the capabilities of GHC RTS.
 --   You can specify it with \"+RTS -N\<x\>\".
 --   A buffer is prepared for each capability.
-data LoggerSet = LoggerSet (Maybe FilePath) (IORef FD) (Array Int Logger) (IO ())
+data LoggerSet = LoggerSet (Maybe FilePath) (IORef FD) (Array Int Logger) (IO ()) (IORef WriteState)
 
 -- | Creating a new 'LoggerSet' using a file.
 newFileLoggerSet :: BufSize -> FilePath -> IO LoggerSet
@@ -93,16 +93,17 @@ newFDLoggerSet size mfile fd = do
     loggers <- replicateM n $ newLogger (max 1 size)
     let arr = listArray (0,n-1) loggers
     fref <- newIORef fd
+    wsRef <- newIORef $ WSNotWriting []
     flush <- mkDebounce defaultDebounceSettings
-        { debounceAction = flushLogStrRaw fref arr
+        { debounceAction = flushLogStrRaw fref wsRef arr
         }
-    return $ LoggerSet mfile fref arr flush
+    return $ LoggerSet mfile fref arr flush wsRef
 
 -- | Writing a log message to the corresponding buffer.
 --   If the buffer becomes full, the log messages in the buffer
 --   are written to its corresponding file, stdout, or stderr.
 pushLogStr :: LoggerSet -> LogStr -> IO ()
-pushLogStr (LoggerSet _ fref arr flush) logmsg = do
+pushLogStr (LoggerSet _ fref arr flush wsRef) logmsg = do
     (i, _) <- myThreadId >>= threadCapability
     -- The number of capability could be dynamically changed.
     -- So, let's check the upper boundary of the array.
@@ -112,7 +113,7 @@ pushLogStr (LoggerSet _ fref arr flush) logmsg = do
           | otherwise = i `mod` lim
     let logger = arr ! j
     fd <- readIORef fref
-    pushLog fd logger logmsg
+    pushLog wsRef fd logger logmsg
     flush
 
 -- | Same as 'pushLogStr' but also appends a newline.
@@ -129,21 +130,21 @@ pushLogStrLn loggerSet logStr = pushLogStr loggerSet (logStr <> "\n")
 --   function can be used to force flushing outside of the debounced
 --   flush calls.
 flushLogStr :: LoggerSet -> IO ()
-flushLogStr (LoggerSet _ fref arr _) = flushLogStrRaw fref arr
+flushLogStr (LoggerSet _ fref arr _ wsRef) = flushLogStrRaw fref wsRef arr
 
-flushLogStrRaw :: IORef FD -> Array Int Logger -> IO ()
-flushLogStrRaw fref arr = do
+flushLogStrRaw :: IORef FD -> IORef WriteState -> Array Int Logger -> IO ()
+flushLogStrRaw fref wsRef arr = do
     let (l,u) = bounds arr
     fd <- readIORef fref
     mapM_ (flushIt fd) [l .. u]
   where
-    flushIt fd i = flushLog fd (arr ! i)
+    flushIt fd i = flushLog wsRef fd (arr ! i)
 
 -- | Renewing the internal file information in 'LoggerSet'.
 --   This does nothing for stdout and stderr.
 renewLoggerSet :: LoggerSet -> IO ()
-renewLoggerSet (LoggerSet Nothing     _    _ _) = return ()
-renewLoggerSet (LoggerSet (Just file) fref _ _) = do
+renewLoggerSet (LoggerSet Nothing     _    _ _ _) = return ()
+renewLoggerSet (LoggerSet (Just file) fref _ _ _) = do
     newfd <- openFileFD file
     oldfd <- atomicModifyIORef' fref (\fd -> (newfd, fd))
     closeFD oldfd
@@ -151,7 +152,7 @@ renewLoggerSet (LoggerSet (Just file) fref _ _) = do
 -- | Flushing the buffers, closing the internal file information
 --   and freeing the buffers.
 rmLoggerSet :: LoggerSet -> IO ()
-rmLoggerSet (LoggerSet mfile fref arr _) = do
+rmLoggerSet (LoggerSet mfile fref arr _ wsRef) = do
     let (l,u) = bounds arr
     fd <- readIORef fref
     let nums = [l .. u]
@@ -159,7 +160,7 @@ rmLoggerSet (LoggerSet mfile fref arr _) = do
     mapM_ freeIt nums
     when (isJust mfile) $ closeFD fd
   where
-    flushIt fd i = flushLog fd (arr ! i)
+    flushIt fd i = flushLog wsRef fd (arr ! i)
     freeIt i = do
         let (Logger mbuf _ _) = arr ! i
         takeMVar mbuf >>= freeBuffer

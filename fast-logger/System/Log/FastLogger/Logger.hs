@@ -32,22 +32,22 @@ newLogger size = do
 
 ----------------------------------------------------------------
 
-pushLog :: FD -> Logger -> LogStr -> IO ()
-pushLog fd logger@(Logger mbuf size ref) nlogmsg@(LogStr nlen nbuilder)
+pushLog :: IORef WriteState -> FD -> Logger -> LogStr -> IO ()
+pushLog wsRef fd logger@(Logger mbuf size ref) nlogmsg@(LogStr nlen nbuilder)
   | nlen > size = do
-      flushLog fd logger
+      flushLog wsRef fd logger
 
       -- Make sure we have a large enough buffer to hold the entire
       -- contents, thereby allowing for a single write system call and
       -- avoiding interleaving. This does not address the possibility
       -- of write not writing the entire buffer at once.
       allocaBytes nlen $ \buf -> withMVar mbuf $ \_ ->
-        toBufIOWith buf nlen (write fd) nbuilder
+        toBufIOWith wsRef buf nlen (write fd) nbuilder
   | otherwise = do
     mmsg <- atomicModifyIORef' ref checkBuf
     case mmsg of
         Nothing  -> return ()
-        Just msg -> withMVar mbuf $ \buf -> writeLogStr fd buf size msg
+        Just msg -> withMVar mbuf $ \buf -> writeLogStr wsRef fd buf size msg
   where
     checkBuf ologmsg@(LogStr olen _)
       | size < olen + nlen = (nlogmsg, Just ologmsg)
@@ -55,8 +55,8 @@ pushLog fd logger@(Logger mbuf size ref) nlogmsg@(LogStr nlen nbuilder)
 
 ----------------------------------------------------------------
 
-flushLog :: FD -> Logger -> IO ()
-flushLog fd (Logger mbuf size lref) = do
+flushLog :: IORef WriteState -> FD -> Logger -> IO ()
+flushLog wsRef fd (Logger mbuf size lref) = do
     logmsg <- atomicModifyIORef' lref (\old -> (mempty, old))
     -- If a special buffer is prepared for flusher, this MVar could
     -- be removed. But such a code does not contribute logging speed
@@ -64,21 +64,22 @@ flushLog fd (Logger mbuf size lref) = do
     -- there is no grantee that this function is exclusively called
     -- for a buffer. So, we use MVar here.
     -- This is safe and speed penalty can be ignored.
-    withMVar mbuf $ \buf -> writeLogStr fd buf size logmsg
+    withMVar mbuf $ \buf -> writeLogStr wsRef fd buf size logmsg
 
 ----------------------------------------------------------------
 
 -- | Writting 'LogStr' using a buffer in blocking mode.
 --   The size of 'LogStr' must be smaller or equal to
 --   the size of buffer.
-writeLogStr :: FD
+writeLogStr :: IORef WriteState
+            -> FD
             -> Buffer
             -> BufSize
             -> LogStr
             -> IO ()
-writeLogStr fd buf size (LogStr len builder)
+writeLogStr wsRef fd buf size (LogStr len builder)
   | size < len = error "writeLogStr"
-  | otherwise  = toBufIOWith buf size (write fd) builder
+  | otherwise  = toBufIOWith wsRef buf size (write fd) builder
 
 write :: FD -> Buffer -> Int -> IO ()
 write fd buf len' = loop buf (fromIntegral len')
