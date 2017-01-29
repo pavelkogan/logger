@@ -4,6 +4,6 @@ packages:
 - date-cache
 - fast-logger
 - monad-logger
-- monad-logger-syslog
+#- monad-logger-syslog
 - wai-logger
-- wai-logger-prefork
+#- wai-logger-prefork

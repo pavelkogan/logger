@@ -42,6 +42,7 @@ Test-Suite doctest
   Main-Is:              doctests.hs
   Build-Depends:        base
                       , doctest >= 0.10.1
+                      , wai-extra
 
 Source-Repository head
   Type:                 git
