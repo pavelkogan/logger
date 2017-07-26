@@ -23,6 +23,7 @@ before_install:
 install:
  - cabal --version
  - echo "$(ghc --version) [$(ghc --print-project-git-commit-id 2> /dev/null || echo '?')]"
+ - ls -lR $HOME/.cabal
  - travis_retry cabal update
 
 script:
