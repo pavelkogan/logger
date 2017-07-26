@@ -1,3 +1,5 @@
+language: c
+
 env:
   global:
     - CABALVER=1.22
@@ -23,8 +25,8 @@ before_install:
 install:
  - cabal --version
  - echo "$(ghc --version) [$(ghc --print-project-git-commit-id 2> /dev/null || echo '?')]"
- - ls -lR $HOME/.cabal
  - travis_retry cabal update
+ - ls -lR $HOME/.cabal
 
 script:
  # First install all packages with dependencies. Have to jump through these
